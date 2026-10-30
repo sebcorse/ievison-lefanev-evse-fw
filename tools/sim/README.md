@@ -50,6 +50,8 @@ of a session: `./sim 15 35 15 0 0 0 6 1` = 6 A offer, EV in B, tau 15 µs.
 | 20–24 | simdiag | diag build interlock, `OFFER`, `CHARGE ON`, `SCAN` under load | closes only through the interlock; never with `INVERT=1` |
 | 25 | sim | `TIME` (screen clock) | `HH:MM[:SS]` accepted, malformed lines ignored, midnight rollover, keeps counting for 60 days without `TIME` (across the `millis()` wrap) |
 | 26 | sim | `INFO EDF 0\|1` (house supply, screen only) | exact lines accepted, others ignored, forgotten after `EDF_STALE_MS` |
+| 27 | sim | `PRESET 10\|16\|24\|AUTO` | every position, bad lines ignored, `MODE MAN` returns to the last manual one |
+| 28 | sim | `INFO SOC <0-100>` (vehicle state of charge, screen only) | 0-100 accepted, anything else ignored, forgotten after `SOC_STALE_MS` |
 | 30 | simct | down-modulation 24 → 10 A, EV reacts in 4.9 s | no over-current fault |
 | 31 | simct | welded contacts | shows the CT cannot see a weld with a compliant EV (known limitation) |
 
@@ -62,6 +64,10 @@ and without a calibrated CT, paused, no link, faults, disabled, diag screen).
 It also prints the bytes written on the bus per screen and checks that an
 unchanged refresh writes nothing (field cache) and that no pixel falls outside
 the panel. `ui_sheet.py` (Pillow) tiles them into `docs/ui-preview.png`.
+`simui anim` writes the charging screen every 100 ms for 21.8 s (`ui_anim_*.ppm`:
+off-grid, the battery fills from empty and gives way to the sun after each fill,
+then fills from `INFO SOC 60`) and `ui_anim.py` makes an animated GIF of them
+(`ui_charging.gif`).
 
 ## Interactive simulator (`simlive` + `live.py`)
 

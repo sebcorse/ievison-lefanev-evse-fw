@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Tile the tools/sim/ui_*.ppm screenshots written by simui into docs/ui-preview.png (x3)."""
-import os
+"""Tile the tools/sim/ui_*.ppm screenshots written by simui into docs/ui-preview.png (x3),
+or into the file given as argument."""
+import os, sys
 from PIL import Image, ImageDraw
 ORDER = ["boot", "ready_in", "ready_greet", "ready_greet_b", "ready_out", "ready_rest", "ready_rest_b", "noclock", "connected", "charging_a",
          "charging_b", "charging_sun", "charging_edf", "charging_man", "charging_man_ct", "charging_forced",
@@ -18,5 +19,5 @@ for i, (n, p) in enumerate(files):
     x = PAD + (i % COLS) * (W + PAD); y = PAD + (i // COLS) * (H + LABEL + PAD)
     d.text((x, y + 2), n, fill=(230, 230, 230))
     sheet.paste(im, (x, y + LABEL))
-out = os.path.join(here, "..", "..", "docs", "ui-preview.png")
+out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, "..", "..", "docs", "ui-preview.png")
 sheet.save(out); print("wrote", out, sheet.size)

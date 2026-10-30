@@ -34,12 +34,44 @@ static DisplayData base() {
   d.ct_ready = true;                   // CT calibrated (CT_READY)
   d.clock_min = 14 * 60 + 32;          // "TIME 14:32:00" received from the ESP bridge
   d.on_edf = -1;                       // no "INFO EDF" yet: the plug icon only
+  d.soc = -1;                          // no "INFO SOC": the charging battery fills from empty
   return d;
 }
-// Off EDF the plug and the sun take turns every 3 s; the bolt blinks every 500 ms.
-static const uint32_t T_PLUG = 102500, T_SUN = 105500;    // bolt lit at both
+// Off EDF the plug and the sun take turns every 3 s (the charging battery: the sun
+// after each complete fill).
+static const uint32_t T_PLUG = 102500, T_SUN = 105500;
+// The charging screen `d` with its battery `ms` into a fill: the charge stops for a
+// moment (the animation starts over), then the clock runs.
+static void charge_for(const DisplayData &d, uint32_t ms) {
+  DisplayData stop = d; stop.contactor = false;
+  display_show(stop); display_show(d);
+  const uint32_t end = g_ms + ms;
+  while (g_ms < end) { g_ms += 50; display_tick(); }
+}
 
-int main() {
+// "simui anim": the charging screen every 100 ms for 21.8 s, written as ui_anim_NNN.ppm
+// (ui_anim.py makes an animated GIF of them), off-grid ("INFO EDF 0"): the battery
+// fills from empty (4.5 s), stays full (0.7 s), gives way to the sun (3 s), and again;
+// "INFO SOC 60" comes during the second sun, then the fill starts from 60 % (1.8 s).
+// It ends on the sun, so that the GIF loops on a fill starting over.
+static int anim() {
+  display_init();
+  DisplayData d = base(); d.state = 2; d.contactor = true; d.offered_a = 16; d.target_a = 16;
+  d.amps = 15.8f; d.kwh = 1.24f; d.elapsed_s = 1800; d.clock_min = 13 * 60 + 5; d.on_edf = 0;
+  g_ms = 102000; display_show(d);
+  for (int k = 0; k < 218; k++) {
+    if (k == 150) d.soc = 60;
+    if (k % 10 == 0) { d.elapsed_s++; display_show(d); }       // the 1 s refresh
+    g_ms += 50; display_tick(); g_ms += 50; display_tick();
+    char path[32]; snprintf(path, sizeof path, "ui_anim_%03d.ppm", k);
+    panel_save_ppm(path);
+  }
+  printf("anim: 218 frames, ui_anim_000.ppm .. ui_anim_217.ppm\n");
+  return 0;
+}
+
+int main(int argc, char **argv) {
+  if (argc > 1 && !strcmp(argv[1], "anim")) return anim();
   display_init();                      save("boot");
 
   // READY screen: the greeting comes in (3.1 s), stays 2 s, leaves (3.1 s), rests 5 s, while
@@ -61,32 +93,35 @@ int main() {
 
   d = base(); d.state = 2; d.contactor = true; d.offered_a = 11; d.target_a = 11; d.amps = 10.8f;
   d.kwh = 3.42f; d.elapsed_s = 3725; d.clock_min = 13 * 60 + 5; d.on_edf = 0;   // off-grid supply (sun icon)
-  g_ms = T_PLUG; display_show(d);      save("charging_a");
-  g_ms += 500;  display_tick();        save("charging_b");
+  g_ms = T_PLUG; display_show(d);      // charging starts: the battery fills from empty in 4.5 s
+  while (g_ms < T_PLUG + 1500) { g_ms += 50; display_tick(); }   save("charging_a");
+  while (g_ms < T_PLUG + 2400) { g_ms += 50; display_tick(); }   save("charging_b");
   display_show(d); printf("re-show, nothing changed: bus_bytes=%ld\n", g_panel_bytes); g_panel_bytes = 0;
-  g_ms = T_SUN; display_show(d);       save("charging_sun");
-  d.on_edf = 1;                        // the same on EDF: the plug stays
-  display_show(d);                     save("charging_edf");
+  while (g_ms < T_PLUG + 6000) { g_ms += 50; display_tick(); }   save("charging_sun");   // full, then the sun
+  d.on_edf = 1; display_show(d);       // back on EDF: the sun gives way, a new fill starts
+  while (g_ms < T_PLUG + 8500) { g_ms += 50; display_tick(); }   save("charging_edf");
+  d.soc = 60;                          // "INFO SOC 60": the fill goes from 60 %
+  display_show(d);                     save("charging_soc");
 
   // before the CT calibration (CT_READY 0): the offer stands in for the current, in grey
   d = base(); d.state = 2; d.contactor = true; d.offered_a = 16; d.target_a = 16; d.sel = 1; d.mode_auto = false;
   d.kwh = 0.12f; d.elapsed_s = 95; d.ct_ready = false;
-  g_ms = T_PLUG; display_show(d);      save("charging_man");
+  charge_for(d, 1000);                 save("charging_man");
 
   // the same with the calibrated CT
   d = base(); d.state = 2; d.contactor = true; d.offered_a = 16; d.target_a = 16; d.sel = 1; d.mode_auto = false;
   d.amps = 15.8f; d.kwh = 4.75f; d.elapsed_s = 4500; d.clock_min = 18 * 60 + 20;
-  display_show(d);                     save("charging_man_ct");
+  charge_for(d, 3200);                 save("charging_man_ct");
 
   // forced charge from Home Assistant, at night
   d = base(); d.state = 2; d.contactor = true; d.offered_a = 16; d.target_a = 16; d.amps = 15.9f;
   d.kwh = 8.12f; d.elapsed_s = 7300; d.clock_min = 23 * 60 + 47; d.on_edf = 1;
-  display_show(d);                     save("charging_forced");
+  charge_for(d, 4000);                 save("charging_forced");
 
   // AUTO without a network setpoint for 30 s: the station charges at its 6 A fallback
   d = base(); d.state = 2; d.contactor = true; d.offered_a = 6; d.target_a = 6; d.amps = 5.9f;
   d.kwh = 1.05f; d.elapsed_s = 2900; d.link_ok = false;
-  display_show(d);                     save("charging_fallback");
+  charge_for(d, 600);                  save("charging_fallback");
 
   d = base(); d.state = 1; d.elapsed_s = 600; d.kwh = 0.85f; d.clock_min = 16 * 60 + 41; d.on_edf = 0;
   g_ms = T_PLUG; display_show(d);      save("paused");

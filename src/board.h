@@ -163,6 +163,7 @@ static const uint8_t PRESETS_A[] = { 10, 16, 24 };   // button presets
 #define NET_TIMEOUT_MS    30000U      // no setpoint from the network -> fallback
 #define NET_FALLBACK_A    EVSE_AMP_MIN
 #define EDF_STALE_MS      180000U     // "INFO EDF" (screen only, sent every minute): forgotten after this
+#define SOC_STALE_MS      900000U     // "INFO SOC" (screen only): the vehicle's state of charge, forgotten after this
 
 // ---- Fault latching, thermal hysteresis, cycle limits ----
 #define FAULT_LATCH_MS        60000U  // minimum time spent in FAULT before any retry

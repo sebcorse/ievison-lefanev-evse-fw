@@ -115,13 +115,6 @@ def icon(frame):
         d.rectangle((18, 51, 21, 55), fill=1)
     return im
 
-BOLT_W, BOLT_H = 12, 20
-def bolt():
-    im = Image.new("1", (BOLT_W, BOLT_H), 0)
-    d = ImageDraw.Draw(im)
-    d.polygon([(7, 0), (1, 11), (6, 11), (4, 19), (11, 7), (6, 7)], fill=1)
-    return im
-
 # Sun, alternating with the plug icon while the supply is off-grid (same 40x56 cell)
 def sun():
     im = Image.new("1", (ICON_W, ICON_H), 0)
@@ -135,7 +128,6 @@ def sun():
     return im
 
 icons = [icon(0), icon(1)]
-bolt_im = bolt()
 sun_im = sun()
 
 # ---------------------------------------------------------------- READY screen
@@ -200,7 +192,7 @@ with open(OUT, "w") as f:
     f.write(f"#define FONT_SMALL_FIRST 32\n#define FONT_SMALL_COUNT {len(small_chars)}   // 32..126 + 127 = degree sign\n")
     f.write(f"#define FONT_BIG_W {BIG_W}\n#define FONT_BIG_H {BIG_H}\n")
     f.write(f"#define FONT_BIG_CHARS \"{''.join(big_chars)}\"\n")
-    f.write(f"#define ICON_W {ICON_W}\n#define ICON_H {ICON_H}\n#define BOLT_W {BOLT_W}\n#define BOLT_H {BOLT_H}\n")
+    f.write(f"#define ICON_W {ICON_W}\n#define ICON_H {ICON_H}\n")
     f.write(f"#define FONT_CLOCK_W {CLOCK_W}\n#define FONT_CLOCK_H {CLOCK_H}\n")
     f.write(f"#define FONT_CLOCK_CHARS \"{''.join(clock_chars)}\"\n")
     f.write(f"#define READY_W {ready_im.width}\n#define READY_H {ready_im.height}\n")
@@ -213,7 +205,6 @@ with open(OUT, "w") as f:
     f.write(c_array("FONT_BIG", data) + "\n\n")
     f.write(c_array("ICON_PLUGGED", pack(icons[0])) + "\n\n")
     f.write(c_array("ICON_UNPLUGGED", pack(icons[1])) + "\n\n")
-    f.write(c_array("ICON_BOLT", pack(bolt_im)) + "\n\n")
     f.write(c_array("ICON_SUN", pack(sun_im)) + "\n\n")
     data = []
     for c in clock_cells_im: data += pack(c)
@@ -238,8 +229,7 @@ for i, c in enumerate(big_cells[:5]):
 y += BIG_H + 4
 sheet.paste(icons[0].convert("L").point(lambda p: 255 if p else 0), (0, y))
 sheet.paste(icons[1].convert("L").point(lambda p: 255 if p else 0), (ICON_W + 8, y))
-sheet.paste(bolt_im.convert("L").point(lambda p: 255 if p else 0), (2 * ICON_W + 16, y))
-sheet.paste(sun_im.convert("L").point(lambda p: 255 if p else 0), (2 * ICON_W + 16 + BOLT_W + 8, y))
+sheet.paste(sun_im.convert("L").point(lambda p: 255 if p else 0), (2 * ICON_W + 16, y))
 y += ICON_H + 4
 x = 0
 for k in (1, 4, 11, 3, 2):                                # "14:32", narrow ':'
@@ -252,4 +242,4 @@ y += ready_im.height + 4
 sheet.paste(greet_im.convert("L"), (0, y))
 sheet.resize((sheet.width * 4, sheet.height * 4), Image.NEAREST).save(PREVIEW)
 print(f"wrote {OUT} and {PREVIEW}: small {len(small_cells)} glyphs, big {len(big_cells)}, clock {len(clock_cells_im)}, "
-      f"icons 2 + bolt + sun, READY {ready_im.size}, greeting {greet_im.size}")
+      f"icons 2 + sun, READY {ready_im.size}, greeting {greet_im.size}")

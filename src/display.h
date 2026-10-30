@@ -2,7 +2,8 @@
 //  display.h - Front-panel UI on the Topway LMT018DNBFWD-1 (ILI9163C,
 //  128x160 portrait, 8-bit parallel over the FSMC). Same layout as the stock
 //  screen plus an AUTO preset, fault codes, the time of day, a READY screen with a
-//  big clock, and a sun when the energy manager reports an off-grid supply.
+//  big clock, a battery filling up while charging, and a sun when the energy
+//  manager reports an off-grid supply.
 // ============================================================================
 #pragma once
 #include <Arduino.h>
@@ -26,6 +27,8 @@ struct DisplayData {
   int16_t  clock_min;    // local time, minutes since midnight (TIME from the ESP bridge), -1 = unknown
   int8_t   on_edf;       // house supply ("INFO EDF" from the energy manager): 1 = on EDF (the grid),
                          // 0 = its own solar / battery supply (sun icon), -1 = unknown or stale
+  int8_t   soc;          // vehicle state of charge in % ("INFO SOC"), -1 = unknown or stale:
+                         // the charging battery fills from there (from empty when unknown)
 };
 
 void display_init();                         // bus + panel init, black screen

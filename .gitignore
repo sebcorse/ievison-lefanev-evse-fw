@@ -24,3 +24,5 @@ tools/sim/simlive_diag
 src/greeting_local.h
 # your settings for the flashing tools (ESP, BROKER_SSH)
 tools/local.env
+tools/sim/ui_anim_*.ppm
+tools/sim/ui_charging.gif

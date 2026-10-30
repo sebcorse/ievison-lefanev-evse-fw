@@ -654,15 +654,29 @@ static int16_t clock_minutes() {
 //  its own solar / battery supply, every minute and on change. Off EDF, the
 //  plug icon takes turns with a sun. Unknown (-1) until the first line and
 //  EDF_STALE_MS after the last one: no sun on old news.
+//  Likewise "INFO SOC <0-100>", the vehicle's state of charge when the energy
+//  manager knows it: the charging battery on the screen fills from there.
+//  Forgotten SOC_STALE_MS after the last one.
 // ---------------------------------------------------------------------------
 static int8_t   g_edf = -1;
 static uint32_t g_edf_ms = 0;
+static int8_t   g_soc = -1;                // vehicle state of charge, %
+static uint32_t g_soc_ms = 0;
 static void info_command(const char *s) {
   if (!strcmp(s, "EDF 0") || !strcmp(s, "EDF 1")) { g_edf = (int8_t)(s[4] - '0'); g_edf_ms = millis(); }
+  else if (!strncmp(s, "SOC ", 4)) {       // 1 to 3 digits, 0..100, nothing else
+    const char *p = s + 4; int v = 0, n = 0;
+    while (*p >= '0' && *p <= '9' && n < 4) { v = v * 10 + (*p++ - '0'); n++; }
+    if (n >= 1 && n <= 3 && !*p && v <= 100) { g_soc = (int8_t)v; g_soc_ms = millis(); }
+  }
 }
 static int8_t edf_now() {                  // latched to -1 once stale (safe across a millis() wrap)
   if (g_edf >= 0 && millis() - g_edf_ms > EDF_STALE_MS) g_edf = -1;
   return g_edf;
+}
+static int8_t soc_now() {                  // the same for the state of charge
+  if (g_soc >= 0 && millis() - g_soc_ms > SOC_STALE_MS) g_soc = -1;
+  return g_soc;
 }
 
 // ---------------------------------------------------------------------------
@@ -675,6 +689,7 @@ static int8_t edf_now() {                  // latched to -1 once stale (safe acr
 //                    "TIME HH:MM[:SS]"         time of day for the screen (every minute)
 //                    "INFO EDF 1" | "INFO EDF 0"  house on EDF / off EDF, for the screen
 //                                              (from the energy manager, every minute + on change)
+//                    "INFO SOC <0-100>"        the vehicle's state of charge, for the screen
 //    STM32 -> ESP  : "STATE=<A|B|C|F> ERR=<n> OFFER=<a> AMP=<a> VOLT=<v> TEMP=<t>
 //                     NTC=<raw> ENERGY=<kWh> TMIN=<min> EN=<0|1> MODE=<AUTO|MAN>
 //                     SEL=<10|16|24|AUTO>"  (SEL = the button position, also in state A)
@@ -1166,6 +1181,7 @@ static DisplayData ui_base() {
   d.mode_auto = true; d.link_ok = true; d.enabled = true;
   d.clock_min = clock_minutes();                                       // the real clock once TIME arrives
   d.on_edf = edf_now();                                                // and the house supply once known
+  d.soc = soc_now();
   return d;
 }
 // Same screens as tools/sim/sim_ui.cpp (docs/ui-preview.png), plus fault 10.
@@ -1499,6 +1515,7 @@ void loop() {
     dd.contactor = g_contactor_closed;
     dd.clock_min = clock_minutes();
     dd.on_edf    = edf_now();
+    dd.soc       = soc_now();
     display_show(dd);
   }
 

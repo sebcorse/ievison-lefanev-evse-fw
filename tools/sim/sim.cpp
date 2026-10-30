@@ -380,6 +380,27 @@ int main(int argc, char **argv) {
       }
       printf("%s\n", bad ? "FAIL" : "PASS");
       break; }
+    case 28: { // INFO SOC (vehicle state of charge, screen only): accepted lines, ignored ones, stale
+      setup();
+      struct { const char *line; int expect; } T[] = {     // expect = soc_now() after the line
+        {"INFO SOC 60", 60}, {"INFO SOC 100", 100}, {"INFO SOC 0", 0}, {"INFO SOC 101", 0},
+        {"INFO SOC 5a", 0}, {"INFO SOC -5", 0}, {"INFO SOC", 0}, {"INFO SOC 0055", 0},
+        {"INFO SOC 42 ", 0}, {"INFO SOC 42", 42} };
+      int bad = 0;
+      printf("=== S28 INFO SOC ===\nbefore any INFO: %d (expect -1)\n", soc_now());
+      if (soc_now() != -1) bad++;
+      for (auto &t : T) {
+        send_cmd(t.line); esp_poll();
+        int s = soc_now(); if (s != t.expect) bad++;
+        printf("%-16s -> %3d (expect %3d)\n", t.line, s, t.expect);
+      }
+      g_now_us += (uint64_t)(SOC_STALE_MS - 1000) * 1000ULL;
+      int s = soc_now(); if (s != 42) bad++;
+      printf("%lu s later     -> %3d (expect  42)\n", (unsigned long)(SOC_STALE_MS / 1000 - 1), s);
+      g_now_us += 2000ULL * 1000ULL;
+      s = soc_now(); if (s != -1) bad++;
+      printf("stale           -> %3d (expect  -1)\n%s\n", s, bad ? "FAIL" : "PASS");
+      break; }
 #endif
     case 18: // no EV, a static 882 Ohm CP-PE leak (C window, no B ever): must never close (ERR 10)
       ev_leak_ohm = 882.0; run(120, {}); summary("S18 static CP-PE leak in the C window"); break;

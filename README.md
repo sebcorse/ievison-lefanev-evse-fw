@@ -204,12 +204,13 @@ piece (PlatformIO, STM32duino, board `genericSTM32F103VE`).
   check in place of the diode check, over-temperature throttle and cut,
   over-current and welded-contact detection, session energy.
 - **Front panel:** the stock layout plus an AUTO preset, fault codes and the
-  time of day; a READY screen with a big clock, the animated plug and a
-  greeting; the LED bar animates with the current. The button cycles
-  10 -> 16 -> 24 -> AUTO.
+  time of day; while charging, a battery fills up as on the stock screen; a
+  READY screen with a big clock, the animated plug and a greeting; the LED bar
+  animates with the current. The button cycles 10 -> 16 -> 24 -> AUTO.
 - **Serial port (J12, 115200 8N1, one ASCII line per command):** `SET <amps>`,
   `MODE AUTO|MAN`, `PRESET 10|16|24|AUTO`, `ENABLE 1|0`, `TIME HH:MM[:SS]`,
   `INFO EDF 1|0` (supply on the grid / off-grid: the screen then shows a sun),
+  `INFO SOC <0-100>` (the vehicle's state of charge: the battery fills from there),
   `VERSION`,
   `BOOTLOADER`. Once a second the station answers
   `STATE=<A|B|C|F> ERR=<n> OFFER=<a> AMP=<a> VOLT=<v> TEMP=<t> NTC=<raw> ENERGY=<kWh> TMIN=<min> EN=<0|1> MODE=<AUTO|MAN> SEL=<10|16|24|AUTO>`.

@@ -17,10 +17,12 @@
 //    y 142..159  preset row  10  16  24  AUTO, active one green + underlined;
 //                AUTO in yellow while it has no network setpoint (fallback current)
 //  Icon: no EV  -> plug inserted 1 s / detached 2 s (stock animation), green
-//        B      -> inserted, yellow      C -> inserted, green, blinking bolt
-//        fault  -> detached, red         disabled -> grey
+//        B      -> inserted, yellow      fault -> detached, red      disabled -> grey
+//        charging -> a battery filling up (white outline, green fill), as on the
+//                    stock screen, from the vehicle's state of charge when known
 //        off-grid ("INFO EDF 0" from the energy manager), B or C, charging
-//        allowed -> alternates with a yellow sun, 3 s each
+//        allowed -> a yellow sun for 3 s: every other 3 s beside the plug, after
+//                    each complete fill beside the battery
 //  READY (no EV, charging allowed) has its own screen:
 //    y   7.. 23  READY
 //    y  32.. 87  time of day in condensed 14x30 digits (--:-- until the first
@@ -232,8 +234,6 @@ static void put_big(Field &f, int x, int y, const char *txt, uint16_t fg) {
 #define Y_TIME    74
 #define X_ICON    84
 #define Y_ICON    40
-#define X_BOLT    70
-#define Y_BOLT    58
 #define Y_STATUS 100
 #define Y_TEMP   120      // bottom info line: clock (left) + temperature (right)
 #define X_TEMP   (UI_W - X_LEFT - 7 * FONT_SMALL_W)   // "%5.1f°C" right-aligned (68..123)
@@ -247,7 +247,7 @@ static void put_big(Field &f, int x, int y, const char *txt, uint16_t fg) {
 #define Y_READY    3      //   "READY" (ink 7..23)
 #define Y_GREET   94      //   greeting line (GREET_H high), the whole width
 #define C_PINK    0xFB56
-#define SUN_PERIOD_MS 3000U   // off EDF: plug and sun take turns
+#define SUN_PERIOD_MS 3000U   // off EDF: the sun's turn (after a plug period or a battery fill)
 
 static Field f_big, f_volt, f_kwh, f_time, f_status, f_temp, f_clock, f_bigclock;
 
@@ -310,7 +310,7 @@ static void greet_tick(uint32_t now) {
 static Field f_diag[10];                       // display_diag() lines
 static DisplayData g_d;
 static bool g_have_data = false;
-static uint8_t  cur_frame = 0xFF; static uint16_t cur_color = 0; static int8_t cur_bolt = -1;
+static uint8_t  cur_frame = 0xFF; static uint16_t cur_color = 0;
 static uint8_t  cur_sel = 0xFF; static bool cur_auto_warn = false;
 static int8_t   cur_ready = -1;                // screen drawn: 1 READY, 0 the others, -1 none yet
 
@@ -318,7 +318,7 @@ static void invalidate() {
   f_big.valid = f_volt.valid = f_kwh.valid = f_time.valid = f_status.valid = f_temp.valid = f_clock.valid = false;
   f_bigclock.valid = false;
   for (uint8_t k = 0; k < 10; k++) f_diag[k].valid = false;
-  cur_frame = 0xFF; cur_bolt = -1; cur_sel = 0xFF; cur_ready = -1;
+  cur_frame = 0xFF; cur_sel = 0xFF; cur_ready = -1;
 }
 
 // READY and the other states share only the bottom line and the presets:
@@ -328,7 +328,7 @@ static void screen_select(bool ready) {
   cur_ready = (int8_t)ready;
   fill_rect(0, 0, UI_W, Y_TEMP, C_BLACK);
   f_big.valid = f_volt.valid = f_kwh.valid = f_time.valid = f_status.valid = f_bigclock.valid = false;
-  cur_frame = 0xFF; cur_bolt = -1;
+  cur_frame = 0xFF;
   if (ready) {
     blit_1bpp((UI_W - READY_W) / 2, Y_READY, READY_W, READY_H, TXT_READY, C_WHITE, C_BLACK);
     g_greet_t0 = millis(); g_greet_x = 0x7FFF;
@@ -345,32 +345,94 @@ static const char *fault_name(uint8_t e) {
   }
 }
 
-static void draw_icon(uint8_t frame, uint16_t color) {       // 0 plugged, 1 unplugged, 2 sun
+// ---- Charging battery (the stock firmware's animation, redrawn) -------------------
+// While the vehicle charges, a battery fills up in the icon cell: white outline, green
+// fill whose surface curves down to the right like a liquid, from the vehicle's state
+// of charge when the energy manager sends it ("INFO SOC"), else from empty. Full in
+// BATT_FILL_MS from empty, BATT_HOLD_MS full, then again from the start - off-grid
+// with the sun's turn (SUN_PERIOD_MS) after each complete fill. Only the cells that
+// change are redrawn, one column at a time (no flicker).
+#define BATT_FILL_MS  4500U
+#define BATT_HOLD_MS   700U
+#define BATT_X  (X_ICON + 9)          // fill area, inside the outline with 1 px of black around
+#define BATT_Y  (Y_ICON + 9)
+#define BATT_W  22
+#define BATT_H  44
+static const int8_t BATT_WAVE[BATT_W] = {   // the surface: 3 px higher on the left, 3 lower on the right
+  3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 0, 0, -1, -1, -2, -2, -2, -2, -3, -3, -3, -3 };
+static uint8_t  g_batt_col[BATT_W];   // filled height of each column, as drawn
+static bool     g_batt_run = false;   // charging: the animation is running
+static bool     g_batt_sun = false;   // off-grid: the sun's turn, between two fills
+static uint32_t g_batt_t0 = 0;        // start of the current fill (or of the sun's turn)
+
+static void batt_frame() {            // outline + empty interior; batt_draw() fills it
+  fill_rect(X_ICON, Y_ICON, ICON_W, ICON_H, C_BLACK);
+  fill_rect(X_ICON + 14, Y_ICON + 2, 12, 4, C_WHITE);       // terminal
+  fill_rect(X_ICON + 6, Y_ICON + 6, 28, 2, C_WHITE);        // top
+  fill_rect(X_ICON + 6, Y_ICON + 54, 28, 2, C_WHITE);       // bottom
+  fill_rect(X_ICON + 6, Y_ICON + 8, 2, 46, C_WHITE);        // left
+  fill_rect(X_ICON + 32, Y_ICON + 8, 2, 46, C_WHITE);       // right
+  memset(g_batt_col, 0, sizeof g_batt_col);
+}
+// Off-grid (the house on its own solar / battery supply, "INFO EDF 0"), the sun shows
+// while a vehicle is connected and charging is allowed - never on a fault.
+static bool sun_shows() { return g_d.on_edf == 0 && g_d.enabled && (g_d.state == 1 || g_d.state == 2); }
+// The fill starts from the state of charge (or 0) and rises to 100 at a steady pace,
+// over 1 s at least (a nearly full battery would flicker).
+static uint32_t batt_from() { return (g_d.soc >= 0 && g_d.soc <= 100) ? (uint32_t)g_d.soc : 0u; }
+static uint32_t batt_fill_ms() {
+  const uint32_t fill = BATT_FILL_MS * (100u - batt_from()) / 100u;
+  return fill < 1000u ? 1000u : fill;
+}
+// The sequence, at every tick while charging: fill, hold full, then off-grid the sun's
+// turn, then a new fill from the start. Back on EDF the sun gives way at once.
+static void batt_step(uint32_t now) {
+  if (!g_batt_run) { g_batt_run = true; g_batt_sun = false; g_batt_t0 = now; return; }
+  const uint32_t t = now - g_batt_t0;
+  if (g_batt_sun) {
+    if (t >= SUN_PERIOD_MS || !sun_shows()) { g_batt_sun = false; g_batt_t0 = now; }
+  } else if (t >= batt_fill_ms() + BATT_HOLD_MS) {
+    g_batt_sun = sun_shows(); g_batt_t0 = now;
+  }
+}
+static uint8_t batt_level(uint32_t now) {    // fill level in % at `now`
+  const uint32_t t = now - g_batt_t0, fill = batt_fill_ms(), from = batt_from();
+  return (uint8_t)(t < fill ? from + (100u - from) * t / fill : 100u);
+}
+static void batt_draw(uint8_t level) {
+  const int h = (int)level * (BATT_H + 6) / 100 - 3;     // the curve spans 6 px: empty at 0, flat at 100
+  for (int c = 0; c < BATT_W; c++) {
+    int hc = h + BATT_WAVE[c];
+    if (hc < 0) hc = 0; else if (hc > BATT_H) hc = BATT_H;
+    const int old = g_batt_col[c];
+    if (hc > old)      fill_rect(BATT_X + c, BATT_Y + BATT_H - hc, 1, hc - old, C_GREEN);
+    else if (hc < old) fill_rect(BATT_X + c, BATT_Y + BATT_H - old, 1, old - hc, C_BLACK);
+    g_batt_col[c] = (uint8_t)hc;
+  }
+}
+
+static void draw_icon(uint8_t frame, uint16_t color) {       // 0 plugged, 1 unplugged, 2 sun, 3 battery
+  if (frame == 3) { batt_frame(); return; }
   blit_1bpp(X_ICON, cur_ready == 1 ? Y_ICON_R : Y_ICON, ICON_W, ICON_H,
             frame == 2 ? ICON_SUN : frame ? ICON_UNPLUGGED : ICON_PLUGGED, color, C_BLACK);
 }
-static void draw_bolt(bool on) {
-  blit_1bpp(X_BOLT, Y_BOLT, BOLT_W, BOLT_H, ICON_BOLT, on ? C_YELLOW : C_BLACK, C_BLACK);
-}
-// Icon + bolt from the current data and the clock (animation). Off-grid (the
-// house on its own solar / battery supply, "INFO EDF 0"), the plug takes turns
-// with a sun while a vehicle is connected and charging is allowed - never on a
-// fault, where the red icon stays.
+// Icon from the current data and the clock (animation). Off-grid (sun_shows), the
+// plug and the sun take turns every SUN_PERIOD_MS; while charging, the sun comes
+// after each complete fill of the battery (batt_step).
 static void icon_update(uint32_t now) {
-  uint8_t frame; uint16_t col; bool bolt = false;
+  uint8_t frame; uint16_t col;
+  const bool charging = (g_d.state == 2 && g_d.contactor);
+  if (charging) batt_step(now); else g_batt_run = false;
   switch (g_d.state) {
     case 0:  frame = ((now / 1000) % 3) ? 1 : 0;                 // inserted 1 s, detached 2 s
              col = g_d.enabled ? C_GREEN : C_GREY; break;
     case 1:  frame = 0; col = g_d.enabled ? C_YELLOW : C_GREY; break;
-    case 2:  frame = 0; col = C_GREEN; bolt = g_d.contactor && ((now / 500) & 1); break;
+    case 2:  frame = charging ? 3 : 0; col = C_GREEN; break;      // the battery fills while charging
     default: frame = 1; col = C_RED; break;
   }
-  if (g_d.on_edf == 0 && g_d.enabled && (g_d.state == 1 || g_d.state == 2) && (now / SUN_PERIOD_MS) % 2) {
-    frame = 2; col = C_YELLOW;
-  }
+  if (charging ? g_batt_sun : (sun_shows() && (now / SUN_PERIOD_MS) % 2)) { frame = 2; col = C_YELLOW; }
   if (frame != cur_frame || col != cur_color) { draw_icon(frame, col); cur_frame = frame; cur_color = col; }
-  // (no bolt on the READY screen: its box would cut into the clock)
-  if (cur_ready != 1 && (int8_t)bolt != cur_bolt) { draw_bolt(bolt); cur_bolt = (int8_t)bolt; }
+  if (frame == 3) batt_draw(batt_level(now));
 }
 
 // auto_warn: AUTO is selected but has no network setpoint (the station runs on
