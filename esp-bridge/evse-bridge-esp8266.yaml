@@ -1,0 +1,246 @@
+# ============================================================================
+#  evse-bridge-esp8266.yaml - ESPHome MQTT <-> UART bridge for the station (ESP8266)
+#
+#  A dumb relay between MQTT and the station's RS-232 port J12: no charging logic
+#  here, all safety and timing live in the STM32 firmware.
+#
+#  ESP8266 notes:
+#    - its only full UART (UART0) is shared with the serial console, so the logger
+#      stays off the UART (baud_rate: 0); logs remain available over the network.
+#    - RX = GPIO13 (D7, hardware UART0 swapped, receive only), TX = GPIO14 (D5,
+#      software serial, INVERTED): GPIO1/GPIO3 are tied to the on-board USB-serial
+#      chip, and GPIO15 (D8) must be low at boot (a module output idling high on it
+#      keeps the NodeMCU from starting). Software serial at 115200 handles the
+#      ~110-character status line per second; drop both sides to 38400 if lines
+#      come garbled.
+#    - ESPHome rather than Tasmota: the wiring needs an inverted TX on one pin next
+#      to a non-inverted hardware RX (Tasmota inverts only its hardware UART, both
+#      ways).
+#    - the ESP is powered by an ordinary (isolated) USB charger; J12's +12 V is not
+#      used. The MAX3232 module is powered from the ESP's 3.3 V (the ESP8266 RX is
+#      not 5 V tolerant).
+#
+#  Wiring (see ../README.md):
+#    J12 pin 3 (station RX, input of its SP3232) <- ESP TX D5/GPIO14, inverted 0/3.3 V, direct wire
+#    J12 pin 2 (station TX, RS-232 +/-5.5 V) -> MAX3232 module R IN -> R OUT -> ESP RX D7/GPIO13
+#    10 kOhm D7 -> GND (weak receiver output on cheap modules) ; module on the ESP's 3V3/GND
+#    J12 pin 1 GND -> ESP GND ; J12 pin 4 (+12 V) not connected ; the module's transmitter is not used
+#  For a wired flash of the ESP, unplug J12 and the charger first.
+#
+#  Firmware update of the STM32 through this bridge (see ../README.md): publish
+#  BOOTLOADER on evse/raw (the STM32 reboots into its ROM bootloader on J12), then
+#  the baud rate on evse/flash: both UARTs switch to 8E1 and TCP port 6638 relays
+#  them. "0" on evse/flash = back to normal; it also falls back by itself after
+#  10 min without traffic. While it is on, the status parser and every evse/*
+#  command are paused.
+#
+#  MQTT: states go under tele/evse-bridge/... with discovery off (some broker ACLs
+#  only let devices write under tele/#): define the Home Assistant entities from
+#  those topics, or turn discovery on with another topic_prefix.
+#  secrets.yaml: wifi_ssid, wifi_password, mqtt_broker, ntp_server, timezone.
+# ============================================================================
+esphome:
+  name: evse-bridge
+
+external_components:
+  - source:
+      type: local
+      path: components      # tcp_uart_bridge (flash mode)
+
+esp8266:
+  board: nodemcuv2        # NodeMCU (ESP-12E, CP2102); a D1 mini works too
+
+ota:
+  - platform: esphome     # later updates over the air (first flash over USB)
+
+web_server:               # local page http://<ip>/ : sensors, live log (incl. UART bytes), OTA upload
+  port: 80
+  version: 2              # lighter than v3, comfortable on an ESP8266
+  local: true             # page assets embedded in the firmware (works without Internet access)
+  ota: true               # firmware upload from the page (ESPHome 2025.5 syntax)
+
+logger:
+  baud_rate: 0            # keep the logger OFF the hardware UART (used by the STM32)
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+mqtt:
+  broker: !secret mqtt_broker
+  # No credentials here: add username / password (!secret) if your broker needs them.
+  topic_prefix: tele/evse-bridge
+  discovery: false
+  # The commands, each written to the station as one line (the ESP only subscribes):
+  on_message:
+    - topic: evse/set_current          # payload = amps, e.g. "12.5"
+      then:
+        - lambda: |-
+            if (id(flasher).active()) return;          // flash mode: never write text into the bootloader session
+            std::string s = "SET " + x + "\n";
+            id(uart_tx).write_array((const uint8_t *) s.data(), s.size());
+    - topic: evse/mode                 # payload = "AUTO" or "MAN"
+      then:
+        - lambda: |-
+            if (id(flasher).active()) return;
+            std::string s = "MODE " + x + "\n";
+            id(uart_tx).write_array((const uint8_t *) s.data(), s.size());
+    - topic: evse/enable               # "1"/"ON" = allow charging ; "0"/"OFF" = stop
+      then:
+        - lambda: |-
+            if (id(flasher).active()) return;
+            std::string v = (x == "ON" || x == "1" || x == "true") ? "1" : "0";
+            std::string s = "ENABLE " + v + "\n";
+            id(uart_tx).write_array((const uint8_t *) s.data(), s.size());
+    - topic: evse/raw                  # any line, sent as-is + newline (OFFER 6, SCAN, BOOTLOADER...)
+      then:
+        - lambda: |-
+            if (id(flasher).active()) return;
+            ESP_LOGD("main", "evse/raw received: %s", x.c_str());
+            std::string s = x + "\n";
+            id(uart_tx).write_array((const uint8_t *) s.data(), s.size());
+    - topic: evse/flash                # "115200" (or another baud) = flash mode ON, "0" = OFF
+      then:
+        - lambda: |-
+            if (x == "0" || x == "OFF") { id(flasher).stop(); return; }
+            uint32_t baud = strtoul(x.c_str(), nullptr, 10);
+            if (baud < 1200 || baud > 115200) baud = 115200;
+            id(flasher).start(baud);
+
+tcp_uart_bridge:
+  id: flasher
+  rx_uart: uart_rx
+  tx_uart: uart_tx
+  port: 6638
+
+# Time of day for the station's screen. The STM32 has no clock of its own: this ESP
+# keeps local time over SNTP and sends "TIME HH:MM:SS" on the minute (and right after
+# each sync); the STM32 counts on with millis() (--:-- only until the first one).
+# Any NTP server the ESP can reach will do: your router, or pool.ntp.org.
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: !secret timezone  # e.g. Europe/Paris: daylight saving is handled here, not on the STM32
+    servers:
+      - !secret ntp_server      # an IP address avoids depending on DNS
+    on_time_sync:
+      then:
+        - script.execute: send_time
+    on_time:
+      - seconds: 0              # every minute, on the minute
+        then:
+          - script.execute: send_time
+
+script:
+  - id: send_time
+    then:
+      - lambda: |-
+          if (id(flasher).active()) return;          // flash mode: never write text into the bootloader session
+          auto t = id(sntp_time).now();
+          if (!t.is_valid()) return;
+          char s[20];
+          snprintf(s, sizeof s, "TIME %02d:%02d:%02d\n", t.hour, t.minute, t.second);
+          id(uart_tx).write_array((const uint8_t *) s, strlen(s));
+
+uart:
+  - id: uart_rx         # D7 = GPIO13: hardware UART0 (swapped), RX only -> receives even while the ESP transmits
+    rx_pin: GPIO13
+    baud_rate: 115200   # must match SERIAL_ESP_BAUD in src/board.h
+    rx_buffer_size: 512   # (flash mode: bootloader reads come back in 256-byte blocks)
+  - id: uart_tx         # D5 = GPIO14: software serial, TX only, INVERTED: drives J12-3 (the station's
+    tx_pin:             # SP3232 receiver) directly with 0/3.3 V levels (idle 0 V = RS-232 mark). The cheap
+      number: GPIO14    # MAX3232 module's transmitter could not hold its positive level under load (3.8 V
+      inverted: true    # falling to 0.8 V on T2OUT), so only the module's RECEIVER is used.
+    baud_rate: 115200
+
+text_sensor:
+  - platform: template
+    id: evse_state
+    name: "EVSE State"               # A / B / C / F
+  - platform: template
+    id: evse_raw
+    name: "EVSE Raw Line"            # every line received from the STM32, verbatim (diag + debugging)
+  - platform: template
+    id: evse_sel
+    name: "EVSE Selection"           # button position 10 / 16 / 24 / AUTO (SEL= in the status line)
+
+binary_sensor:
+  - platform: template
+    id: evse_enabled
+    name: "EVSE Charging Enabled"
+
+sensor:
+  - platform: template
+    id: evse_err
+    name: "EVSE Error Code"          # 0 none, 1 diode, 2 D/E, 3 temp, 4 timer, 5 over-current, 6 weld, 7 ADC, 8 NTC
+    accuracy_decimals: 0
+  - platform: template
+    id: evse_offer
+    name: "EVSE Offered Current"
+    unit_of_measurement: "A"
+    accuracy_decimals: 1
+  - platform: template
+    id: evse_amp
+    name: "EVSE Current"
+    unit_of_measurement: "A"
+    accuracy_decimals: 1
+  - platform: template
+    id: evse_volt
+    name: "EVSE Voltage"
+    unit_of_measurement: "V"
+    accuracy_decimals: 0
+  - platform: template
+    id: evse_temp
+    name: "EVSE Temperature"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 0
+  - platform: template
+    id: evse_energy
+    name: "EVSE Session Energy"
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 3
+  - platform: template
+    id: evse_tmin
+    name: "EVSE Session Minutes"     # session duration (TMIN= in the status line)
+    unit_of_measurement: "min"
+    accuracy_decimals: 0
+  - platform: wifi_signal              # handy: the link budget at the final spot
+    name: "EVSE Bridge WiFi Signal"
+    update_interval: 60s
+
+# Parse the STM32 status lines and publish them to the sensors above.
+interval:
+  - interval: 50ms
+    then:
+      - lambda: |-
+          static std::string line;
+          if (id(flasher).active()) { line.clear(); return; }   // flash mode: the bytes belong to the TCP client
+          while (id(uart_rx).available()) {
+            uint8_t c;
+            id(uart_rx).read_byte(&c);
+            if (c == '\n') {
+              auto val = [&](const char *key) -> std::string {
+                size_t p = line.find(key);
+                if (p == std::string::npos) return std::string();
+                p += strlen(key);
+                size_t e = line.find(' ', p);
+                return line.substr(p, (e == std::string::npos) ? std::string::npos : e - p);
+              };
+              id(evse_raw).publish_state(line.c_str());
+              std::string s;
+              s = val("STATE=");  if (!s.empty()) id(evse_state).publish_state(s.c_str());
+              s = val("ERR=");    if (!s.empty()) id(evse_err).publish_state(atoi(s.c_str()));
+              s = val("OFFER=");  if (!s.empty()) id(evse_offer).publish_state(atof(s.c_str()));
+              s = val("AMP=");    if (!s.empty()) id(evse_amp).publish_state(atof(s.c_str()));
+              s = val("VOLT=");   if (!s.empty()) id(evse_volt).publish_state(atof(s.c_str()));
+              s = val("TEMP=");   if (!s.empty()) id(evse_temp).publish_state(atof(s.c_str()));
+              s = val("ENERGY="); if (!s.empty()) id(evse_energy).publish_state(atof(s.c_str()));
+              s = val("EN=");     if (!s.empty()) id(evse_enabled).publish_state(atoi(s.c_str()) != 0);
+              s = val("TMIN=");   if (!s.empty()) id(evse_tmin).publish_state(atof(s.c_str()));
+              s = val("SEL=");    if (!s.empty()) id(evse_sel).publish_state(s.c_str());
+              line.clear();
+            } else if (c >= 0x20 && c < 0x7F) {    // printable only: drops the 0x00 the inverted TX emits at boot
+              line += (char) c;
+              if (line.size() > 160) line.clear();   // overflow guard
+            }
+          }

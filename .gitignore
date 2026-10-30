@@ -1,0 +1,26 @@
+# PlatformIO build output
+.pio/
+
+# ESPHome: credentials and build cache (never commit)
+esp-bridge/secrets.yaml
+esp-bridge/.esphome/
+
+# Host simulation bench binaries (tools/sim/build.sh)
+tools/sim/sim
+tools/sim/simdiag
+tools/sim/simct
+
+# Editors / OS
+.vscode/
+.DS_Store
+tools/sim/simui
+tools/sim/ui_*.ppm
+# vendor documents, not redistributed
+docs/datasheets/
+tools/sim/simlive
+tools/sim/simlive_diag
+
+# your own READY screen greeting (tools/fonts/gen_fonts.py --local)
+src/greeting_local.h
+# your settings for the flashing tools (ESP, BROKER_SSH)
+tools/local.env
