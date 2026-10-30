@@ -140,10 +140,12 @@ bursts over one full period and keep the plateau, not single samples (see
 You need an **ST-Link V2** (a clone is fine), four wires and
 [PlatformIO](https://platformio.org/).
 
+![SWD connections: J9 and the NRST lead soldered on R57](docs/swd-nrst.jpg)
+
 - **J9** carries SWDIO, SWCLK and GND. The stock firmware turns the SWD pins
   into GPIOs at boot, so the first connection has to be made **under reset**,
   and NRST is not on J9: solder a thin flying lead on the MCU-side pad of
-  **R57** (the NRST pull-up, see the close-up above), insulate it, and wire it
+  **R57** (the NRST pull-up, photo above), insulate it, and wire it
   to the probe's RST pin.
 - Many ST-Link V2 clones do not drive their RST pin for STM32 targets: check
   with a meter that NRST goes to 0 V when the connection starts, or hold the
